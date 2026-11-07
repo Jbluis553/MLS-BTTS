@@ -93,11 +93,24 @@ def extract_btts_yes_odd(odds_data: dict | None) -> float | None:
     bookmakers = odds_data.get("bookmakers") or []
     yes_odds = []
     for bm in bookmakers:
-        for market in bm.get("markets", []):
+        if not isinstance(bm, dict):
+            continue
+        markets = bm.get("markets") or []
+        # Algunas respuestas pueden representar los mercados como un objeto
+        # indexado por nombre, en lugar de una lista.
+        if isinstance(markets, dict):
+            markets = markets.values()
+        for market in markets:
+            # Ignora nombres/valores simples: solo un objeto de mercado contiene
+            # las selecciones y cuotas que podemos extraer.
+            if not isinstance(market, dict):
+                continue
             name = str(market.get("name", "")).lower()
             if "both_teams_to_score" in name or name == "btts":
                 entries = market.get("entries") or market.get("selections") or []
                 for e in entries:
+                    if not isinstance(e, dict):
+                        continue
                     sel = str(e.get("selection", e.get("name", ""))).lower()
                     if sel == "yes":
                         odd = e.get("odd") or e.get("odds")
@@ -128,3 +141,4 @@ def extract_xg(stats_data: dict | None) -> tuple[float | None, float | None]:
         return None, None
     data = stats_data.get("data", stats_data)
     return _find_xg(data, "home"), _find_xg(data, "away")
+
