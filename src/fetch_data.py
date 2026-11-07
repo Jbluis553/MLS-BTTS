@@ -4,7 +4,6 @@ Guarda data/raw/mls_dataset.jsonl con una fila por partido finalizado:
 match_id, season_id, kickoff, equipos, goles, cuota BTTS-Yes (promedio) y xG si hay.
 """
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -33,6 +32,9 @@ def load_existing() -> dict:
 def main() -> None:
     client = TheStatsAPIClient()
     mls = client.find_mls()
+    if not mls:
+        raise SystemExit("La API no devolvio informacion de la competicion MLS.")
+
     competition_id = mls["id"]
     print(f"MLS: {mls['name']} ({competition_id})")
 
@@ -48,8 +50,8 @@ def main() -> None:
         matches = client.list_matches(competition_id, season_id, status="finished")
         finished = [m for m in matches if m.get("status") == "finished"]
         for m in finished:
-            match_id = m["id"]
-            if match_id in cache:
+            match_id = m.get("id")
+            if not match_id or match_id in cache:
                 continue
             score = (m.get("score") or {}).get("regulation") or {}
             if score.get("home") is None or score.get("away") is None:
@@ -63,16 +65,21 @@ def main() -> None:
             if m.get("xg_available"):
                 home_xg, away_xg = extract_xg(client.match_stats(match_id))
 
+            home_team = m.get("home_team") or {}
+            away_team = m.get("away_team") or {}
+            if not home_team.get("id") or not away_team.get("id"):
+                continue
+
             row = {
                 "match_id": match_id,
                 "season_id": season_id,
                 "season_name": season.get("name"),
                 "kickoff": m.get("utc_date"),
                 "matchday": m.get("matchday"),
-                "home_team_id": m["home_team"]["id"],
-                "home_team": m["home_team"]["name"],
-                "away_team_id": m["away_team"]["id"],
-                "away_team": m["away_team"]["name"],
+                "home_team_id": home_team["id"],
+                "home_team": home_team.get("name"),
+                "away_team_id": away_team["id"],
+                "away_team": away_team.get("name"),
                 "home_goals": int(score["home"]),
                 "away_goals": int(score["away"]),
                 "btts_yes_odd": btts_yes_odd,
