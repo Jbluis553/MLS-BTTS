@@ -38,11 +38,16 @@ class TheStatsAPIClient:
     # ------------------------------------------------------------------ #
     def find_mls(self) -> dict:
         """Devuelve la competicion MLS (id tipo comp_...)."""
-        js = self._get("/football/competitions", search="Major League Soccer", per_page=20)
+        # TheStatsAPI registra la competición con el nombre corto "MLS";
+        # buscar por el nombre largo "Major League Soccer" devuelve una lista vacía.
+        js = self._get("/football/competitions", search="MLS", per_page=20)
         data = (js or {}).get("data", [])
-        if not data:
-            raise TheStatsAPIError("MLS no encontrada en /football/competitions")
-        return data[0]
+        for competition in data:
+            if str(competition.get("name", "")).strip().casefold() == "mls":
+                return competition
+        if data:
+            return data[0]
+        raise TheStatsAPIError("MLS no encontrada en /football/competitions")
 
     def list_seasons(self, competition_id: str) -> list[dict]:
         js = self._get(f"/football/competitions/{competition_id}/seasons")
