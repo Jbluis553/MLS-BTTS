@@ -1,4 +1,5 @@
 """Cliente minimo para TheStatsAPI con manejo de rate limits (429 / Retry-After)."""
+import math
 import os
 import time
 
@@ -15,7 +16,11 @@ class TheStatsAPIClient:
     """Cliente REST. Toda llamada lleva `Authorization: Bearer <key>`."""
 
     def __init__(self, api_key: str | None = None, max_retries: int = 6, timeout: int = 30):
-        self.api_key = api_key or os.environ["THESTATSAPI_KEY"]
+        self.api_key = api_key or os.environ.get("THESTATSAPI_KEY")
+        if not self.api_key:
+            raise TheStatsAPIError("Falta configurar la variable THESTATSAPI_KEY.")
+        if max_retries < 1:
+            raise ValueError("max_retries debe ser al menos 1")
         self.max_retries = max_retries
         self.timeout = timeout
         self.session = requests.Session()
@@ -24,121 +29,158 @@ class TheStatsAPIClient:
     def _get(self, path: str, **params):
         params = {k: v for k, v in params.items() if v is not None}
         for attempt in range(self.max_retries):
-            resp = self.session.get(f"{BASE_URL}{path}", params=params, timeout=self.timeout)
+            try:
+                resp = self.session.get(f"{BASE_URL}{path}", params=params, timeout=self.timeout)
+            except requests.RequestException as exc:
+                if attempt + 1 == self.max_retries:
+                    raise TheStatsAPIError(f"Error de red consultando {path}: {exc}") from exc
+                time.sleep(min(2 ** attempt, 30))
+                continue
             if resp.status_code == 429:
-                wait = int(resp.headers.get("Retry-After", "60"))
+                try:
+                    wait = max(0, int(resp.headers.get("Retry-After", "60")))
+                except (TypeError, ValueError):
+                    wait = min(2 ** attempt, 60)
                 time.sleep(wait)
                 continue
             if resp.status_code == 404:
                 return None
-            resp.raise_for_status()
-            return resp.json()
-        raise TheStatsAPIError(f"Rate limit persistente tras {self.max_retries} reintentos: {path}")
+            try:
+                resp.raise_for_status()
+                return resp.json()
+            except (requests.RequestException, ValueError) as exc:
+                raise TheStatsAPIError(f"Respuesta invalida consultando {path}: {exc}") from exc
+        raise TheStatsAPIError(f"La API sigue limitando solicitudes tras {self.max_retries} intentos: {path}")
 
-    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _data_list(response, endpoint: str) -> list:
+        if response is None:
+            return []
+        if isinstance(response, list):
+            return response
+        if not isinstance(response, dict):
+            raise TheStatsAPIError(f"Formato inesperado de respuesta en {endpoint}: se esperaba objeto/lista")
+        data = response.get("data", [])
+        if data is None:
+            return []
+        if isinstance(data, dict):
+            return list(data.values())
+        if isinstance(data, list):
+            return data
+        raise TheStatsAPIError(f"Formato inesperado de data en {endpoint}")
+
     def find_mls(self) -> dict:
         """Devuelve la competicion MLS (id tipo comp_...)."""
-        # TheStatsAPI registra la competición con el nombre corto "MLS";
-        # buscar por el nombre largo "Major League Soccer" devuelve una lista vacía.
-        js = self._get("/football/competitions", search="MLS", per_page=20)
-        data = (js or {}).get("data", [])
+        data = self._data_list(self._get("/football/competitions", search="MLS", per_page=20),
+                               "/football/competitions")
         for competition in data:
-            if str(competition.get("name", "")).strip().casefold() == "mls":
+            if isinstance(competition, dict) and str(competition.get("name", "")).strip().casefold() == "mls":
                 return competition
-        if data:
-            return data[0]
+        for competition in data:
+            if isinstance(competition, dict) and competition.get("id"):
+                return competition
         raise TheStatsAPIError("MLS no encontrada en /football/competitions")
 
     def list_seasons(self, competition_id: str) -> list[dict]:
-        js = self._get(f"/football/competitions/{competition_id}/seasons")
-        return (js or {}).get("data", [])
+        return [s for s in self._data_list(
+            self._get(f"/football/competitions/{competition_id}/seasons"), "seasons")
+                if isinstance(s, dict)]
 
     def list_matches(self, competition_id: str, season_id: str,
                      status: str | None = None) -> list[dict]:
         """Partidos de una temporada, paginando con per_page=100."""
         out, page = [], 1
         while True:
-            js = self._get("/football/matches",
-                           competition_id=competition_id,
-                           season_id=season_id,
-                           status=status,
-                           per_page=100,
-                           page=page)
-            if not js:
+            response = self._get("/football/matches", competition_id=competition_id,
+                                 season_id=season_id, status=status, per_page=100, page=page)
+            if response is None:
                 break
-            out.extend(js.get("data", []))
-            if page >= js.get("meta", {}).get("total_pages", 1):
+            if not isinstance(response, dict):
+                raise TheStatsAPIError("Formato inesperado de respuesta al consultar partidos")
+            batch = self._data_list(response, "/football/matches")
+            out.extend(m for m in batch if isinstance(m, dict))
+            meta = response.get("meta") or {}
+            if not isinstance(meta, dict) or page >= int(meta.get("total_pages") or 1) or not batch:
                 break
             page += 1
         return out
 
     def match_odds(self, match_id: str) -> dict | None:
-        js = self._get(f"/football/matches/{match_id}/odds")
-        return (js or {}).get("data")
+        response = self._get(f"/football/matches/{match_id}/odds")
+        if isinstance(response, dict):
+            data = response.get("data", response)
+            return data if isinstance(data, dict) else None
+        return None
 
     def match_stats(self, match_id: str) -> dict | None:
-        js = self._get(f"/football/matches/{match_id}/stats")
-        return (js or {}).get("data")
+        response = self._get(f"/football/matches/{match_id}/stats")
+        if isinstance(response, dict):
+            data = response.get("data", response)
+            return data if isinstance(data, dict) else None
+        return None
 
 
-# --------------------------------------------------------------------- #
+def _as_dict_list(value) -> list[dict]:
+    if isinstance(value, dict):
+        value = value.values()
+    if not isinstance(value, (list, tuple)) and not hasattr(value, "__iter__"):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def extract_btts_yes_odd(odds_data: dict | None) -> float | None:
-    """Promedio de cuotas 'yes' del mercado both_teams_to_score entre bookmakers.
-
-    Estructura esperada: data.bookmakers[].markets[] con name 'both_teams_to_score'
-    y entradas yes/no (campo 'odd'). Parseo defensivo por si cambian nombres.
-    """
-    if not odds_data:
+    """Promedia cuotas 'yes' de BTTS; ignora campos con tipos o valores invalidos."""
+    if not isinstance(odds_data, dict):
         return None
-    bookmakers = odds_data.get("bookmakers") or []
     yes_odds = []
-    for bm in bookmakers:
-        if not isinstance(bm, dict):
-            continue
-        markets = bm.get("markets") or []
-        # Algunas respuestas pueden representar los mercados como un objeto
-        # indexado por nombre, en lugar de una lista.
-        if isinstance(markets, dict):
-            markets = markets.values()
-        for market in markets:
-            # Ignora nombres/valores simples: solo un objeto de mercado contiene
-            # las selecciones y cuotas que podemos extraer.
-            if not isinstance(market, dict):
+    for bookmaker in _as_dict_list(odds_data.get("bookmakers")):
+        for market in _as_dict_list(bookmaker.get("markets")):
+            name = str(market.get("name", "")).strip().casefold()
+            if "both_teams_to_score" not in name and name != "btts":
                 continue
-            name = str(market.get("name", "")).lower()
-            if "both_teams_to_score" in name or name == "btts":
-                entries = market.get("entries") or market.get("selections") or []
-                for e in entries:
-                    if not isinstance(e, dict):
-                        continue
-                    sel = str(e.get("selection", e.get("name", ""))).lower()
-                    if sel == "yes":
-                        odd = e.get("odd") or e.get("odds")
-                        if odd:
-                            yes_odds.append(float(odd))
-    if not yes_odds:
+            entries = market.get("entries") or market.get("selections") or []
+            for entry in _as_dict_list(entries):
+                selection = str(entry.get("selection", entry.get("name", ""))).strip().casefold()
+                if selection != "yes":
+                    continue
+                try:
+                    odd = float(entry.get("odd", entry.get("odds")))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(odd) and odd > 0:
+                    yes_odds.append(odd)
+    return round(sum(yes_odds) / len(yes_odds), 4) if yes_odds else None
+
+
+def _as_float(value) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
         return None
-    return round(sum(yes_odds) / len(yes_odds), 4)
+    return result if math.isfinite(result) else None
 
 
 def _find_xg(node, side: str) -> float | None:
-    """Busca xG del equipo local/visitante dentro del JSON de stats (parseo defensivo)."""
+    """Busca xG del equipo local/visitante dentro del JSON de stats."""
     if not isinstance(node, dict):
         return None
     team = node.get(side) or node.get(f"{side}_team") or {}
     if isinstance(team, dict):
         for key in ("expected_goals", "xg", "xG"):
-            if key in team and team[key] is not None:
-                return float(team[key])
+            if team.get(key) is not None:
+                value = _as_float(team[key])
+                if value is not None:
+                    return value
     for key in (f"{side}_xg", f"{side}_expected_goals", f"xg_{side}"):
-        if key in node and node[key] is not None:
-            return float(node[key])
+        if node.get(key) is not None:
+            value = _as_float(node[key])
+            if value is not None:
+                return value
     return None
 
 
 def extract_xg(stats_data: dict | None) -> tuple[float | None, float | None]:
-    if not stats_data:
+    if not isinstance(stats_data, dict):
         return None, None
     data = stats_data.get("data", stats_data)
     return _find_xg(data, "home"), _find_xg(data, "away")
-
