@@ -1,4 +1,4 @@
-"""Construye features temporales sin usar resultados futuros ni partidos pendientes."""
+"""Construye features temporales avanzadas sin usar resultados futuros ni partidos pendientes."""
 import sys
 from pathlib import Path
 
@@ -41,6 +41,7 @@ def _team_history(df: pd.DataFrame) -> dict:
         if "xg" not in part:
             part["xg"] = float("nan")
         part["btts"] = ((part["gf"] > 0) & (part["ga"] > 0)).astype(int)
+        part["gd"] = part["gf"] - part["ga"]  # Diferencia de goles
         for team_id, team_games in part.dropna(subset=["team_id"]).groupby("team_id", sort=False):
             history.setdefault(team_id, []).append(team_games)
     return {team_id: pd.concat(parts, ignore_index=True).sort_values("kickoff").reset_index(drop=True)
@@ -79,14 +80,20 @@ def build_features(df: pd.DataFrame, p: dict) -> pd.DataFrame:
             same_side = prev[prev["side"] == side].tail(n_home_away) if not prev.empty else prev
             recent = prev.tail(n_any)
             prefix = side
+            
+            # Métricas base
             features[f"{prefix}_gf_same"] = same_side["gf"].mean() if not same_side.empty else float("nan")
             features[f"{prefix}_ga_same"] = same_side["ga"].mean() if not same_side.empty else float("nan")
             features[f"{prefix}_btts_rate"] = recent["btts"].mean() if not recent.empty else float("nan")
             features[f"{prefix}_gf_avg"] = recent["gf"].mean() if not recent.empty else float("nan")
             features[f"{prefix}_ga_avg"] = recent["ga"].mean() if not recent.empty else float("nan")
+            
+            # Nuevas métricas avanzadas de mejora
+            features[f"{prefix}_btts_rate_same"] = same_side["btts"].mean() if not same_side.empty else float("nan")
+            features[f"{prefix}_gd_avg"] = recent["gd"].mean() if not recent.empty else float("nan")
+            
             features[f"{prefix}_rest_days"] = ((match["kickoff"] - prev["kickoff"].iloc[-1]).total_seconds() / 86400
                                                    if not prev.empty else float("nan"))
-            # Media xG histórica: se usa xG del equipo en sus partidos previos, de cualquier sede.
             features[f"{prefix}_xg_avg"] = (recent["xg"].dropna().tail(n_xg).mean()
                                               if not recent.empty else float("nan"))
 
@@ -106,7 +113,7 @@ def main() -> None:
     params = load_params()
     raw = ROOT / "data" / "raw" / "mls_dataset.jsonl"
     if not raw.exists() or raw.stat().st_size == 0:
-        raise SystemExit(f"No existe el dataset de partidos o esta vacio: {raw}")
+        raise SystemExit(f"No existe el dataset de partidos o está vacío: {raw}")
     try:
         df = pd.read_json(raw, lines=True)
     except ValueError as exc:
@@ -127,10 +134,8 @@ def main() -> None:
         df = df[df["season_id"].isin(selected)]
     features = build_features(df, params)
     if features.empty:
-        raise SystemExit("No se pudieron construir features: no hay filas de entrada validas.")
+        raise SystemExit("No se pudieron construir features: no hay filas de entrada válidas.")
     before = len(features)
-    # Los primeros partidos de cada equipo pueden carecer de historial; el imputador
-    # de train.py los maneja sin descartar datos ni eliminar filas por odds/xG ausentes.
     features = features.dropna(subset=["btts_yes"])
     if features.empty:
         raise SystemExit("No hay partidos finalizados con marcador utilizable para entrenar.")
