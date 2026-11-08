@@ -2,30 +2,30 @@
   "best_model": "hist_gradient_boosting",
   "results": {
     "logistic_regression": {
-      "log_loss": 0.6579,
-      "brier": 0.2326,
-      "roc_auc": 0.5363
+      "log_loss": 0.6606,
+      "brier": 0.2339,
+      "roc_auc": 0.5283
     },
     "hist_gradient_boosting": {
-      "log_loss": 0.6575,
-      "brier": 0.2324,
-      "roc_auc": 0.5228
+      "log_loss": 0.6594,
+      "brier": 0.2333,
+      "roc_auc": 0.5312
     }
   },
   "test_period": {
-    "from": "2025-09-13 23:30:00+00:00",
-    "to": "2026-11-02 02:45:00+00:00"
+    "from": "2025-09-18 01:30:00+00:00",
+    "to": "2026-11-08 00:00:00+00:00"
   },
-  "test_size": 608,
-  "base_rate_btts_yes": 0.6398,
+  "test_size": 611,
+  "base_rate_btts_yes": 0.6318,
   "calibration": {
     "prob_true": [
-      0.63125,
-      0.671875
+      0.6189189189189189,
+      0.6514522821576764
     ],
     "prob_pred": [
-      0.5896805969095433,
-      0.605947237981051
+      0.5820950484642613,
+      0.6131226732466593
     ]
   }
 }
