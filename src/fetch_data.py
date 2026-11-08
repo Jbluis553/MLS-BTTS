@@ -25,7 +25,7 @@ def load_existing() -> dict:
         try:
             row = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise SystemExit(f"JSON invalido en {DATASET}, linea {line_number}: {exc}") from exc
+            raise SystemExit(f"JSON inválido en {DATASET}, línea {line_number}: {exc}") from exc
         if isinstance(row, dict) and row.get("match_id"):
             rows[row["match_id"]] = row
     return rows
@@ -41,7 +41,7 @@ def main() -> None:
 
     seasons = client.list_seasons(competition_id)
     if not seasons:
-        raise SystemExit("La API no devolvio temporadas para la MLS")
+        raise SystemExit("La API no devolvió temporadas para la MLS")
     cache = load_existing()
     new_rows = 0
 
