@@ -6,5 +6,5 @@
 
 | Modelo | Log loss | Brier | ROC-AUC |
 |---|---:|---:|---:|
-| logistic_regression | 0.6606 | 0.2339 | 0.5283 |
+| logistic_regression | 0.6606 | 0.2339 | 0.5285 |
 | hist_gradient_boosting | 0.6594 | 0.2333 | 0.5312 |
