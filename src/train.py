@@ -1,4 +1,4 @@
-"""Entrena y evalua modelos BTTS-Yes con particion temporal."""
+"""Entrena y evalúa modelos BTTS-Yes con partición temporal y calibración robusta."""
 import json
 import sys
 from pathlib import Path
@@ -30,7 +30,7 @@ def main() -> None:
     params = load_params()
     feature_path = ROOT / "data" / "processed" / "features.csv"
     if not feature_path.exists() or feature_path.stat().st_size == 0:
-        raise SystemExit(f"No existe features.csv o esta vacio: {feature_path}")
+        raise SystemExit(f"No existe features.csv o está vacío: {feature_path}")
     df = pd.read_csv(feature_path, parse_dates=["kickoff"])
     required = {"btts_yes", "kickoff"}
     if not required.issubset(df.columns):
@@ -38,16 +38,16 @@ def main() -> None:
     df["btts_yes"] = pd.to_numeric(df["btts_yes"], errors="coerce")
     df = df.dropna(subset=["btts_yes", "kickoff"]).sort_values("kickoff").reset_index(drop=True)
     if df.empty:
-        raise SystemExit("No hay filas con objetivo y fecha validos.")
+        raise SystemExit("No hay filas con objetivo y fecha válidos.")
     df["btts_yes"] = df["btts_yes"].astype(int)
     if not set(df["btts_yes"].unique()).issubset({0, 1}):
-        raise SystemExit("btts_yes debe contener unicamente 0 y 1.")
+        raise SystemExit("btts_yes debe contener únicamente 0 y 1.")
 
     if params.get("use_odds_feature", True) and "btts_yes_odd" in df:
         coverage = float(df["btts_yes_odd"].notna().mean())
         if coverage < float(params.get("min_odds_coverage", 0.5)):
             df = df.drop(columns=["btts_yes_odd"])
-            print(f"Cuota BTTS con cobertura {coverage:.0%} < minima: se omite como feature")
+            print(f"Cuota BTTS con cobertura {coverage:.0%} < mínima: se omite como feature")
 
     excluded = {"btts_yes", "kickoff", "match_id", "season_id"}
     feature_cols = [col for col in df.columns if col not in excluded]
@@ -70,14 +70,14 @@ def main() -> None:
     if cv < 2:
         raise SystemExit("Se necesitan al menos dos ejemplos de cada clase en train para calibrar el modelo.")
 
-    # Ajusta los valores faltantes solo con train; conserva y aplica los mismos valores al predecir.
     fill_values = X_train.median().fillna(0.0)
     X_train = X_train.fillna(fill_values).astype(float)
     X_test = X_test.fillna(fill_values).astype(float)
+    
     candidates = {
-        "logistic_regression": LogisticRegression(max_iter=2000, C=1.0),
+        "logistic_regression": LogisticRegression(max_iter=3000, C=0.5),
         "hist_gradient_boosting": HistGradientBoostingClassifier(
-            max_iter=300, learning_rate=0.05, random_state=int(params.get("random_state", 42))),
+            max_iter=400, learning_rate=0.03, max_depth=5, random_state=int(params.get("random_state", 42))),
     }
 
     results, best_name, best_model, best_loss = {}, None, None, float("inf")
@@ -97,7 +97,7 @@ def main() -> None:
             best_loss, best_name, best_model = loss, name, calibrated
 
     if best_model is None:
-        raise SystemExit("No se pudo entrenar ningun modelo.")
+        raise SystemExit("No se pudo entrenar ningún modelo.")
     bundle = {
         "model": best_model,
         "features": feature_cols,
