@@ -4,7 +4,7 @@
     "logistic_regression": {
       "log_loss": 0.6606,
       "brier": 0.2339,
-      "roc_auc": 0.5285
+      "roc_auc": 0.5283
     },
     "hist_gradient_boosting": {
       "log_loss": 0.6594,
